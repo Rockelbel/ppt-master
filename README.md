@@ -128,7 +128,7 @@ for test in tools/test_*.mjs; do node "$test" || exit $?; done
 - [PRD.md](./PRD.md)：产品目标、MVP 范围与验收标准
 - [DEVELOPMENT_PLAN.md](./DEVELOPMENT_PLAN.md)：PMF 假设、开发计划与迭代方向
 - [ARCHITECTURE.md](./ARCHITECTURE.md)：数据模型与接口边界
-- [DEVELOPMENT_LOG.md](./DEVELOPMENT_LOG.md)：本地开发记录与问题修复历史
+- `DEVELOPMENT_LOG.md`：本地开发记录与问题修复历史，默认不进入公开仓库
 - [AGENT_TOOLS.md](./AGENT_TOOLS.md)：Agent、飞书和外部工具接入说明
 
 ## 路线图

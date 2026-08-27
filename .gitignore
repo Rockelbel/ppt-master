@@ -21,6 +21,7 @@ data/quality-report.json
 data/company-knowledge.json
 data/feishu-documents.json
 PPT_KNOWLEDGE.md
+DEVELOPMENT_LOG.md
 
 output/
 .tmp/
