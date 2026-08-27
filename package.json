@@ -1,0 +1,16 @@
+{
+  "name": "ppt-master",
+  "version": "0.1.0",
+  "private": false,
+  "description": "A template-grounded sales presentation asset library and AI workspace.",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "check": "node --check server.mjs && node --check app.js && node tools/task_spec.mjs && node tools/test_reference_page_validation.mjs",
+    "init": "node tools/init_workspace.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}
