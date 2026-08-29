@@ -544,6 +544,7 @@ function rewriteStatusLabel(task){
   if(task.status==='processing'||task.status==='queued')return '处理中';
   if(task.deliveryStatus==='deliverable')return '可交付';
   if(task.deliveryStatus==='process')return '待确认';
+  if(task.status==='review'&&!task.planConfirmed)return '待确认计划';
   return '过程稿';
 }
 function renderCustomerRewriteTasks(){

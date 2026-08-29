@@ -510,6 +510,8 @@ async function classifyCustomerChangePlanWithAi(pages, sourceCustomer, targetCus
   const result = [];
   const deterministicPlan = buildCustomerChangePlan(pages, sourceCustomer);
   const batchSize = 4;
+  const timeoutMs = Math.max(3000, Number(process.env.CUSTOMER_REWRITE_AI_TIMEOUT_MS || 15000));
+  const retryLimit = Math.max(1, Math.min(3, Number(process.env.CUSTOMER_REWRITE_AI_RETRY_LIMIT || 2)));
   for (let start = 0; start < pages.length; start += batchSize) {
     const batch = pages.slice(start, start + batchSize);
     const input = batch.map(page => ({ page: page.page, title: page.title, text: String(page.allText || "").slice(0, 2200) }));
@@ -526,9 +528,9 @@ async function classifyCustomerChangePlanWithAi(pages, sourceCustomer, targetCus
       `页面：${JSON.stringify(input)}`,
     ].join("\n");
     let lastError;
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
+    for (let attempt = 1; attempt <= retryLimit; attempt += 1) {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 60000);
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
         const response = await fetch(endpoint, {
           method: "POST",
@@ -549,7 +551,7 @@ async function classifyCustomerChangePlanWithAi(pages, sourceCustomer, targetCus
       } catch (error) {
         lastError = error;
         await logAiDebug({ kind: "customer-rewrite-plan-error", batchStart: start + 1, attempt, error: error.message });
-        if (attempt < 3) await new Promise(resolve => setTimeout(resolve, retryDelay(attempt)));
+        if (attempt < retryLimit) await new Promise(resolve => setTimeout(resolve, retryDelay(attempt)));
       } finally { clearTimeout(timer); }
     }
     if (lastError) {
@@ -557,7 +559,25 @@ async function classifyCustomerChangePlanWithAi(pages, sourceCustomer, targetCus
       result.push(...batch.map(page => deterministicPlan.find(item => item.page === Number(page.page))));
     }
   }
-  return result.length === pages.length ? result : null;
+  if (result.length !== pages.length) return null;
+  // Never let a model downgrade a safe deterministic decision into an
+  // unsupported customer-fact rewrite. A page containing source-customer
+  // context stays pending unless it is a cover/TOC rewrite or explicitly
+  // removed; pages without source context stay retain unless removed.
+  return result.map((candidate, index) => {
+    const safe = deterministicPlan[index];
+    if (!safe) return candidate;
+    if (safe.action === "pending" && !["pending", "remove"].includes(candidate.action)) {
+      return { ...safe, reason: "页面包含客户专属内容，模型建议需人工确认后再改写" };
+    }
+    if (safe.action === "rewrite" && !["rewrite", "remove"].includes(candidate.action)) {
+      return { ...safe, reason: "封面或目录需保留客户化改写动作" };
+    }
+    if (safe.action === "retain" && !["retain", "remove"].includes(candidate.action)) {
+      return { ...safe, reason: "页面未检测到源客户事实，保留原页避免无依据改写" };
+    }
+    return candidate;
+  });
 }
 
 function createCustomerRewriteRecord(input = {}) {
@@ -826,6 +846,22 @@ async function runCustomerRewriteTask(taskId) {
       metrics: { processedPages: pages.length, pendingPages, retainedPages: changePlan.filter(item => item.action === "retain").length, replacedPages: changePlan.filter(item => item.action === "rewrite").length },
       message: task.planConfirmed ? "已使用销售确认的逐页计划，正在重新生成" : "逐页变更计划已生成，等待销售确认后可重新生成",
     });
+    if (!task.planConfirmed) {
+      // Customerization is a two-step workflow: upload and propose a plan
+      // first; only an explicit plan confirmation may mutate the source copy,
+      // generate gap pages, render previews, or expose an export.
+      const planned = customerRewriteTasks.get(taskId);
+      await updateCustomerRewriteTask(taskId, {
+        status: "review",
+        stage: "planning",
+        progress: 100,
+        deliveryStatus: "draft",
+        completedAt: new Date().toISOString(),
+        operationLog: customerRewriteOperation(planned || task, "plan-generated", { pageCount: pages.length, pendingPages, evidenceCount: evidence.length }),
+        message: "逐页变更计划已生成，请确认计划后重新生成",
+      });
+      return customerRewriteTasks.get(taskId);
+    }
     const outDir = path.join(root, "output", "customer-rewrites", task.id);
     const output = path.join(outDir, `${safeTaskName(task.targetCustomer, "target")}-${safeTaskName(task.name, "source")}.pptx`);
     await fs.mkdir(outDir, { recursive: true });
@@ -3388,7 +3424,9 @@ await loadPreviewSessions();
 await loadGeneratedPages();
 resumePendingImportTasks();
 for (const task of customerRewriteTasks.values()) {
-  if (!["completed", "failed"].includes(task.status) && task.sourcePath) setImmediate(() => runCustomerRewriteTask(task.id).catch(error => console.error(`Customer rewrite task ${task.id} resume failed:`, error)));
+  // A review task is intentionally paused until the salesperson confirms the
+  // saved plan; only interrupted queued/processing work may resume on restart.
+  if (["queued", "processing"].includes(task.status) && task.sourcePath) setImmediate(() => runCustomerRewriteTask(task.id).catch(error => console.error(`Customer rewrite task ${task.id} resume failed:`, error)));
 }
 
 server.listen(port, "127.0.0.1", () => {
