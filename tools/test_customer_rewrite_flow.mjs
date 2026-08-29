@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 const root = process.cwd();
-const port = 4331;
+const port = 4400 + (process.pid % 200);
 const source = path.join(root, ".tmp", "regression-single-page.pptx");
 let output = "";
 let child = startServer();
@@ -18,6 +18,13 @@ function startServer() {
   next.stdout.on("data", chunk => { output += chunk.toString(); });
   next.stderr.on("data", chunk => { output += chunk.toString(); });
   return next;
+}
+
+async function stopServer() {
+  if (!child || child.killed) return;
+  const exited = new Promise(resolve => child.once("exit", resolve));
+  child.kill("SIGTERM");
+  await Promise.race([exited, new Promise(resolve => setTimeout(resolve, 3000))]);
 }
 
 async function waitForServer() {
@@ -60,8 +67,7 @@ try {
 
   // Restart must preserve the review boundary: an unconfirmed plan cannot
   // resume into rewriting or expose an output after process recovery.
-  child.kill("SIGTERM");
-  await new Promise(resolve => setTimeout(resolve, 300));
+  await stopServer();
   child = startServer();
   await waitForServer();
   task = await getTask(id);
@@ -96,5 +102,5 @@ try {
   await fs.access(path.join(root, task.previewPath));
   console.log("customer rewrite flow regression: ok");
 } finally {
-  child.kill("SIGTERM");
+  await stopServer();
 }
